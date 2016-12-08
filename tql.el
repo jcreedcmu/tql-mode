@@ -13,6 +13,7 @@
 
 (defvar tiros-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-f") 'tiros-run-current-query-file)
     (define-key map (kbd "C-c C-c") 'tiros-run-current-query)
     map)
   "Keymap for `tiros-mode'.")
@@ -66,14 +67,27 @@
 (defun current-query-region ()
   (if (use-region-p)
       (cons (region-beginning) (region-end))
-    (let* ((begin
-            (save-excursion
-              (let ((search (search-backward "." (buffer-end -1) t)))
-                (if search (+ 1 (point)) (buffer-end -1)))))
-           (end
-            (save-excursion
-              (search-forward "." (buffer-end 1) "limit") (point))))
+    (lexical-let* ((begin
+                    (save-excursion
+                      (let ((search (search-backward "." (buffer-end -1) t)))
+                        (if search (+ 1 (point)) (buffer-end -1)))))
+                   (end
+                    (save-excursion
+                      (search-forward "." (buffer-end 1) "limit") (point))))
       (cons begin end))))
+
+(defun tiros-defs-of-string (str)
+  (apply 'concat
+         (delq nil
+               (mapcar
+                (lambda (x) (if (tiros-defp x) (concat x ".") nil))
+                (split-string str "[.]" )))))
+
+(defun tiros-defp (str)
+  (string-match "^[ \n\r\t]*def" str))
+
+(defun tiros-defs-of-buffer ()
+  (tiros-defs-of-string (buffer-substring-no-properties (point-min) (point-max))))
 
 (defvar tiros-response-buffer-name "*Tiros Response*")
 
@@ -91,17 +105,34 @@
 (defun tiros-run-current-query ()
   (interactive)
   (lexical-let*
-      ((query-name "/tmp/query.tiros")
-       (json-name "/tmp/req.json")
+      ((region-endpoints (current-query-region))
+       (query (buffer-substring-no-properties
+                 (car region-endpoints)
+                 (cdr region-endpoints)))
+       (full-query
+        (concat (tiros-defs-of-buffer)
+                "\n"
+                query)))
+    (if (not (string-match "[^ \n\r\t]" query)) (error "There is no query here."))
+    (if (tiros-defp query) (error "Can't run a definition. Try running a query instead."))
+    (tiros-run-query full-query)))
+
+(defun tiros-run-current-query-file ()
+  (interactive)
+  (tiros-run-query (buffer-substring-no-properties
+                    (point-min)
+                    (point-max))))
+
+(defun tiros-run-query (query)
+  (interactive)
+  (lexical-let*
+      ((query-file-name "/tmp/query.tql")
        (buf (get-buffer-create tiros-response-buffer-name))
-       (region-endpoints (current-query-region))
-       (beg (car region-endpoints))
-       (end (cdr region-endpoints))
        (start-time (current-time))
        (fin (lambda (proc event)
               (when (equal event "finished")
-                (let* ((end-time (current-time))
-                       (time (time-subtract end-time start-time)))
+                (lexical-let* ((end-time (current-time))
+                               (time (time-subtract end-time start-time)))
                   (message "Tiros finished: %s s" (time-to-seconds time))
                   (set-window-point (get-buffer-window buf) (point-min))))))
        (endp (pcase tiros-endpoint
@@ -109,14 +140,13 @@
                (`prod "")
                (`local "--host localhost:9000 --no-ssl")))
        (cmd (concat
-             "node " tiros-root "/tql/parse.js < " query-name " | jq '{queries:[.[].query]}' > " json-name "  && " tiros-root "/cli/tiros.py " tiros-flags " " endp " --profile tiros/us-west-2 --file " json-name " /v1/folquery")))
-    (write-region beg end query-name)
+             "tiros query " tiros-flags " " endp " -f " query-file-name)))
+    (with-temp-file query-file-name (insert query))
     (display-buffer buf '(display-buffer-reuse-window))
     (with-current-buffer buf (erase-buffer))
-    (let* ((p (start-process-shell-command
-               "tiros" tiros-response-buffer-name cmd))
-           (s (process-sentinel p)))
-      (set-process-sentinel p fin)
-      )))
+    (lexical-let* ((p (start-process-shell-command
+                       "tiros" tiros-response-buffer-name cmd))
+                   (s (process-sentinel p)))
+      (set-process-sentinel p fin))))
 
 (provide 'tiros)
