@@ -91,14 +91,6 @@
 
 (defvar tiros-response-buffer-name "*Tiros Response*")
 
-(defvar tiros-root
-  ;; default to ..
-  (or (directory-file-name
-       (file-name-directory
-        (directory-file-name
-         (file-name-directory load-file-name)))) nil)
-  "Set this to the root directory of your tiros git checkout")
-
 (defvar tiros-endpoint 'dev "'dev | 'prod | 'local")
 (defvar tiros-flags "" "extra flags for tiros cli")
 
